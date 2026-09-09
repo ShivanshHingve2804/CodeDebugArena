@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pytest
+      - name: Verify fixed versions pass
+        run: |
+          cd challenges
+          for dir in */; do
+            echo "Testing $dir (fixed)..."
+            cd "$dir"
+            CHALLENGE_TARGET=fixed python -m pytest test_challenge.py -v --tb=short
+            cd ..
+          done
+        shell: bash
+        env:
+          CHALLENGE_TARGET: fixed
