@@ -255,6 +255,7 @@ def _execute_run(run_id: str, challenges: list[Path]) -> None:
                 _runs[run_id]["current"] = {
                     "agent": agent["name"],
                     "challenge": challenge.name,
+                    "started_at": _utc_now(),
                 }
             try:
                 result = _run_one(agent, challenge)
@@ -427,6 +428,7 @@ class Handler(SimpleHTTPRequestHandler):
             "started_at": None,
             "finished_at": None,
             "current": None,
+            "challenge_ids": challenge_ids,
             "total_pairs": pairs,
             "completed_pairs": 0,
             "agents": [
@@ -485,4 +487,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
