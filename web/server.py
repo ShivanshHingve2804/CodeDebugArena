@@ -206,11 +206,14 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
     before = (challenge / "buggy.py").read_text(encoding="utf-8")
     prompt_context = (challenge / "README.md").read_text(encoding="utf-8")
     prompt = (
-        "You are fixing one CodeDebugArena Python challenge. Read the README and "
-        "buggy.py in the current directory. Modify only buggy.py to fix the defect "
-        "while preserving the documented behavior. Do not create or modify tests, "
-        "and do not modify other files. The evaluator will run the benchmark tests "
-        "after you finish.\n\nChallenge: "
+        "You are fixing one CodeDebugArena Python challenge. Read README.md and "
+        "buggy.py in the current working directory. Diagnose the defect, then make "
+        "and save the code change directly in buggy.py so the evaluator can test it. "
+        "Do not only explain the fix, print suggested code, or return a patch in your "
+        "response: the buggy.py file itself must contain your fix before you exit. "
+        "Preserve the documented behavior. Modify only buggy.py; do not create or "
+        "modify tests or any other files. The evaluator will run the trusted "
+        "benchmark tests after you finish.\n\nChallenge: "
         + challenge.name
         + "\n\nChallenge README:\n"
         + prompt_context
