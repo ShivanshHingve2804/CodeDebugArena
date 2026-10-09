@@ -1,4 +1,4 @@
-"""CodeDebugArena — CLI runner for debugging challenges.
+"""CodeDebugArena - CLI runner for debugging challenges.
 
 Commands:
   python runner.py list
@@ -152,9 +152,9 @@ def cmd_list(args) -> int:
         print(f"{RED}No challenges found at {CHALLENGES_DIR}.{RESET}")
         return 1
 
-    print(f"\n{BOLD}🐛 CodeDebugArena — {len(challenges)} Challenges{RESET}\n")
+    print(f"\n{BOLD}CodeDebugArena - {len(challenges)} Challenges{RESET}\n")
     print(f"  {'#':<5} {'Challenge':<45} {'Status':<20}")
-    print(f"  {'─'*5} {'─'*45} {'─'*20}")
+    print(f"  {'-'*5} {'-'*45} {'-'*20}")
 
     for challenge in challenges:
         name = challenge.name
@@ -163,7 +163,7 @@ def cmd_list(args) -> int:
         has_test = (challenge / "test_challenge.py").is_file()
 
         if has_buggy and has_fixed and has_test:
-            status = f"{GREEN}✓ complete{RESET}"
+            status = f"{GREEN}OK complete{RESET}"
         else:
             missing = []
             if not has_buggy:
@@ -172,7 +172,7 @@ def cmd_list(args) -> int:
                 missing.append("fixed.py")
             if not has_test:
                 missing.append("test_challenge.py")
-            status = f"{YELLOW}✗ missing: {', '.join(missing)}{RESET}"
+            status = f"{YELLOW}MISSING missing: {', '.join(missing)}{RESET}"
 
         match = re.match(r"^(\d+)_", name)
         number = match.group(1) if match else "?"
@@ -193,7 +193,7 @@ def cmd_test(args) -> int:
         print(f"{RED}No challenges found{selector}.{RESET}")
         return 2
 
-    print(f"\n{BOLD}🧪 Running tests against {target.upper()} versions{RESET}\n")
+    print(f"\n{BOLD}Running tests against {target.upper()} versions{RESET}\n")
 
     total_pass = 0
     total_fail = 0
@@ -210,7 +210,7 @@ def cmd_test(args) -> int:
                 missing.append("test_challenge.py")
             if not target_file.is_file():
                 missing.append(f"{target}.py")
-            print(f"  {YELLOW}⏭  {challenge.name}: missing {', '.join(missing)}{RESET}")
+            print(f"  {YELLOW}SKIP  {challenge.name}: missing {', '.join(missing)}{RESET}")
             total_error += 1
             continue
 
@@ -224,26 +224,26 @@ def cmd_test(args) -> int:
                 and challenge.name in EXPECTED_BUGGY_TIMEOUT_CHALLENGES
             ):
                 print(
-                    f"  {GREEN}✅ {challenge.name}: expected buggy timeout "
+                    f"  {GREEN}OK {challenge.name}: expected buggy timeout "
                     f"({timeout}s){RESET}"
                 )
                 total_fail += 1
             else:
                 print(
-                    f"  {RED}❌ {challenge.name}: test process timed out "
+                    f"  {RED}FAIL {challenge.name}: test process timed out "
                     f"after {timeout}s{RESET}"
                 )
                 total_error += 1
         elif return_code == 0:
-            print(f"  {GREEN}✅ {challenge.name}: ALL TESTS PASSED{RESET}")
+            print(f"  {GREEN}OK {challenge.name}: ALL TESTS PASSED{RESET}")
             total_pass += 1
         else:
-            print(f"  {RED}❌ {challenge.name}: TESTS FAILED{RESET}")
+            print(f"  {RED}FAIL {challenge.name}: TESTS FAILED{RESET}")
             _print_failure_detail(output, args.verbose)
             total_fail += 1
 
     print(
-        f"\n{BOLD}📊 Results:{RESET} "
+        f"\n{BOLD}Results:{RESET} "
         f"{GREEN}{total_pass} passed{RESET}, "
         f"{RED}{total_fail} failed{RESET}, "
         f"{YELLOW}{total_error} errors/skipped{RESET}"
@@ -265,7 +265,7 @@ def cmd_validate(args) -> int:
         print(f"{RED}No challenges found at {CHALLENGES_DIR}.{RESET}")
         return 2
 
-    print(f"\n{BOLD}🔍 Validating all challenges...{RESET}\n")
+    print(f"\n{BOLD}Validating all challenges...{RESET}\n")
 
     valid = 0
     invalid = 0
@@ -276,7 +276,7 @@ def cmd_validate(args) -> int:
         fixed_file = challenge / "fixed.py"
 
         if not all(file.is_file() for file in (test_file, buggy_file, fixed_file)):
-            print(f"  {YELLOW}⏭  {challenge.name}: incomplete challenge{RESET}")
+            print(f"  {YELLOW}SKIP  {challenge.name}: incomplete challenge{RESET}")
             invalid += 1
             continue
 
@@ -302,8 +302,8 @@ def cmd_validate(args) -> int:
         if buggy_failure_detected and fixed_passes:
             timeout_note = " (expected performance timeout)" if expected_slow_timeout else ""
             print(
-                f"  {GREEN}✅ {challenge.name}: valid "
-                f"(buggy fails ✓{timeout_note}, fixed passes ✓){RESET}"
+                f"  {GREEN}OK {challenge.name}: valid "
+                f"(buggy fails OK{timeout_note}, fixed passes OK){RESET}"
             )
             valid += 1
             continue
@@ -322,7 +322,7 @@ def cmd_validate(args) -> int:
         elif not fixed_passes:
             issues.append("fixed implementation failed its tests")
 
-        print(f"  {RED}❌ {challenge.name}: INVALID — {'; '.join(issues)}{RESET}")
+        print(f"  {RED}FAIL {challenge.name}: INVALID — {'; '.join(issues)}{RESET}")
         if not buggy_failure_detected:
             _print_failure_detail(buggy_output, getattr(args, "verbose", False))
         if not fixed_passes:
@@ -330,7 +330,7 @@ def cmd_validate(args) -> int:
         invalid += 1
 
     print(
-        f"\n{BOLD}📊 Validation:{RESET} "
+        f"\n{BOLD}Validation:{RESET} "
         f"{GREEN}{valid} valid{RESET}, "
         f"{RED}{invalid} invalid{RESET} out of {len(challenges)} challenges"
     )
@@ -341,7 +341,7 @@ def main() -> None:
     """Parse CLI arguments and execute the requested command."""
     parser = argparse.ArgumentParser(
         prog="python runner.py",
-        description="CodeDebugArena — Run and validate debugging challenges",
+        description="CodeDebugArena - Run and validate debugging challenges",
     )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
