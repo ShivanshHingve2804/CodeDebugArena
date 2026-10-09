@@ -215,6 +215,8 @@ def _run_one(agent: dict, challenge: Path) -> dict:
             output = (test_proc.stdout + "\n" + test_proc.stderr).strip()
             passed = test_proc.returncode == 0
             error = "" if passed else (output[-2400:] or "Tests failed without output.")
+            if not passed and "No module named pytest" in output:
+                error = 'pytest is not installed. Install project dependencies with: python -m pip install -e ".[dev]"'
             if agent_proc.returncode != 0 and passed:
                 error = f"Agent exited with status {agent_proc.returncode}, but tests passed."
         except FileNotFoundError:
@@ -449,6 +451,8 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Bind address (loopback by default).")
     parser.add_argument("--port", type=int, default=8000, help="HTTP port.")
     args = parser.parse_args()
+    if args.host not in {"127.0.0.1", "localhost"}:
+        parser.error("the local agent runner can only bind to 127.0.0.1 or localhost")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"CodeDebugArena dashboard: http://{args.host}:{args.port}/")
     print("Agent CLI commands run locally in isolated temporary challenge copies.")
