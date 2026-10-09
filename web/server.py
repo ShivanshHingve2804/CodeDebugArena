@@ -1,16 +1,18 @@
 """Local web UI and agent evaluation server for CodeDebugArena.
 
-The server binds to loopback only. Agent commands are configured by the user
-and launched without a shell in a temporary copy of each challenge.
+The server binds to loopback only. CLI agents and OpenAI-compatible model APIs
+run against a temporary copy of each challenge.
 """
 
 from __future__ import annotations
 
 import copy
 import difflib
+import ast
 import importlib.util
 import json
 import os
+import re
 import shlex
 import signal
 import shutil
@@ -25,6 +27,8 @@ from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
+from types import SimpleNamespace
 
 
 WEB_ROOT = Path(__file__).resolve().parent
@@ -139,6 +143,8 @@ def _finish_stopped_run(run_id: str) -> None:
             _set_agent(run_id, index, status="stopped")
     _set_run(run_id, status="stopped", current=None, finished_at=_utc_now())
     with _runs_lock:
+        for agent in _runs.get(run_id, {}).get("agents", []):
+            agent.pop("api_key", None)
         _run_cancel_events.pop(run_id, None)
 
 
@@ -168,6 +174,8 @@ def _snapshot(run_id: str, *, public: bool = False) -> dict | None:
             # Commands can accidentally contain credentials; never echo them
             # back through the status endpoint.
             agent.pop("command", None)
+            agent.pop("api_key", None)
+            agent.pop("endpoint", None)
     return result
 
 
@@ -202,6 +210,54 @@ def _line_changes(before: str, after: str) -> int:
     )
 
 
+def _openai_compatible_url(endpoint: str) -> str:
+    endpoint = endpoint.rstrip("/")
+    if endpoint.endswith("/chat/completions"):
+        return endpoint
+    return endpoint + "/chat/completions" if endpoint.endswith("/v1") else endpoint + "/v1/chat/completions"
+
+
+def _run_openai_compatible(agent: dict, prompt: str, readme: str, source: str) -> str:
+    """Ask a chat-completions-compatible model for the complete replacement file."""
+    user_prompt = (
+        prompt
+        + "\n\nReturn the complete corrected contents of buggy.py in one python code block. "
+        + "Do not return a diff or explanation.\n\nREADME.md:\n````text\n"
+        + readme
+        + "\n````\n\nCurrent buggy.py:\n````python\n"
+        + source
+        + "\n````"
+    )
+    payload = json.dumps(
+        {
+            "model": agent["model_name"],
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a code-editing agent. Return the complete requested file, not a patch.",
+                },
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+    ).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if agent.get("api_key"):
+        headers["Authorization"] = "Bearer " + agent["api_key"]
+    request = Request(_openai_compatible_url(agent["endpoint"]), data=payload, headers=headers)
+    with urlopen(request, timeout=AGENT_TIMEOUT_SECONDS) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    content = data["choices"][0]["message"]["content"]
+    if isinstance(content, list):
+        content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("The API returned an empty assistant response.")
+    match = re.search(r"```(?:python|py)?\s*\n(.*?)```", content, flags=re.IGNORECASE | re.DOTALL)
+    source_out = match.group(1).strip("\n") if match else content.strip()
+    ast.parse(source_out)
+    return source_out + "\n"
+
+
 def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
     before = (challenge / "buggy.py").read_text(encoding="utf-8")
     prompt_context = (challenge / "README.md").read_text(encoding="utf-8")
@@ -223,78 +279,85 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
         work_dir = Path(temp)
         (work_dir / "buggy.py").write_text(before, encoding="utf-8")
         (work_dir / "README.md").write_text(prompt_context, encoding="utf-8")
-        try:
-            argv = shlex.split(agent["command"], posix=True)
-        except ValueError as exc:
-            return {
-                "challenge_id": challenge.name,
-                "challenge": challenge.name[3:].replace("_", " ").title(),
-                "status": "agent_error",
-                "error": "Could not parse the agent command: " + str(exc),
-                "agent_time_s": 0,
-                "test_time_s": 0,
-                "lines_changed": 0,
-            }
-        if not argv:
-            return {
-                "challenge_id": challenge.name,
-                "challenge": challenge.name[3:].replace("_", " ").title(),
-                "status": "agent_error",
-                "error": "Agent command is empty.",
-                "agent_time_s": 0,
-                "test_time_s": 0,
-                "lines_changed": 0,
-            }
-        if "{prompt}" not in agent["command"]:
-            return {
-                "challenge_id": challenge.name,
-                "challenge": challenge.name[3:].replace("_", " ").title(),
-                "status": "agent_error",
-                "error": 'Agent command must include the "{prompt}" placeholder.',
-                "agent_time_s": 0,
-                "test_time_s": 0,
-                "lines_changed": 0,
-            }
-
-        argv = [
-            token.replace("{prompt}", prompt)
-            .replace("{challenge}", challenge.name)
-            .replace("{challenge_dir}", str(work_dir))
-            for token in argv
-        ]
         started = time.monotonic()
-        try:
-            agent_proc, agent_stdout, agent_stderr = _run_process(
-                run_id,
-                argv,
-                timeout=AGENT_TIMEOUT_SECONDS,
-                cwd=work_dir,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
-            )
-        except FileNotFoundError:
-            return {
-                "challenge_id": challenge.name,
-                "challenge": challenge.name[3:].replace("_", " ").title(),
-                "status": "agent_error",
-                "error": "Agent CLI was not found. Check that it is installed and on PATH.",
-                "agent_time_s": round(time.monotonic() - started, 2),
-                "test_time_s": 0,
-                "lines_changed": 0,
-            }
-        except subprocess.TimeoutExpired:
-            return {
-                "challenge_id": challenge.name,
-                "challenge": challenge.name[3:].replace("_", " ").title(),
-                "status": "agent_error",
-                "error": f"Agent timed out after {AGENT_TIMEOUT_SECONDS} seconds.",
-                "agent_time_s": round(time.monotonic() - started, 2),
-                "test_time_s": 0,
-                "lines_changed": 0,
-            }
+        if agent.get("connection_type") == "openai_compatible":
+            try:
+                response_text = _run_openai_compatible(agent, prompt, prompt_context, before)
+                (work_dir / "buggy.py").write_text(response_text, encoding="utf-8")
+                agent_proc = SimpleNamespace(returncode=0)
+                agent_stdout = "OpenAI-compatible model response was written to buggy.py."
+                agent_stderr = ""
+            except Exception as exc:
+                return {
+                    "challenge_id": challenge.name,
+                    "challenge": challenge.name[3:].replace("_", " ").title(),
+                    "status": "agent_error",
+                    "error": "Custom API agent failed: " + str(exc),
+                    "agent_time_s": round(time.monotonic() - started, 2),
+                    "test_time_s": 0,
+                    "lines_changed": 0,
+                }
+        else:
+            try:
+                argv = shlex.split(agent["command"], posix=True)
+            except ValueError as exc:
+                return {
+                    "challenge_id": challenge.name,
+                    "challenge": challenge.name[3:].replace("_", " ").title(),
+                    "status": "agent_error",
+                    "error": "Could not parse the agent command: " + str(exc),
+                    "agent_time_s": 0,
+                    "test_time_s": 0,
+                    "lines_changed": 0,
+                }
+            if not argv or "{prompt}" not in agent["command"]:
+                return {
+                    "challenge_id": challenge.name,
+                    "challenge": challenge.name[3:].replace("_", " ").title(),
+                    "status": "agent_error",
+                    "error": 'Agent command must be non-empty and include the "{prompt}" placeholder.',
+                    "agent_time_s": 0,
+                    "test_time_s": 0,
+                    "lines_changed": 0,
+                }
+            argv = [
+                token.replace("{prompt}", prompt)
+                .replace("{challenge}", challenge.name)
+                .replace("{challenge_dir}", str(work_dir))
+                for token in argv
+            ]
+            try:
+                agent_proc, agent_stdout, agent_stderr = _run_process(
+                    run_id,
+                    argv,
+                    timeout=AGENT_TIMEOUT_SECONDS,
+                    cwd=work_dir,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                )
+            except FileNotFoundError:
+                return {
+                    "challenge_id": challenge.name,
+                    "challenge": challenge.name[3:].replace("_", " ").title(),
+                    "status": "agent_error",
+                    "error": "Agent CLI was not found. Check that it is installed and on PATH.",
+                    "agent_time_s": round(time.monotonic() - started, 2),
+                    "test_time_s": 0,
+                    "lines_changed": 0,
+                }
+            except subprocess.TimeoutExpired:
+                return {
+                    "challenge_id": challenge.name,
+                    "challenge": challenge.name[3:].replace("_", " ").title(),
+                    "status": "agent_error",
+                    "error": f"Agent timed out after {AGENT_TIMEOUT_SECONDS} seconds.",
+                    "agent_time_s": round(time.monotonic() - started, 2),
+                    "test_time_s": 0,
+                    "lines_changed": 0,
+                }
         if agent_proc is None or _stop_requested(run_id):
             return {
                 "challenge_id": challenge.name,
@@ -443,6 +506,7 @@ def _execute_run(run_id: str, challenges: list[Path]) -> None:
                 success_rate=round(100 * passed / len(results), 1) if results else 0,
                 lines_changed=sum(item["lines_changed"] for item in results),
             )
+            _set_agent(run_id, agent_index, api_key="")
     with _runs_lock:
         cancel_event = _run_cancel_events.get(run_id)
         if cancel_event and cancel_event.is_set():
@@ -569,16 +633,44 @@ class Handler(SimpleHTTPRequestHandler):
         normalized_agents = []
         for item in agents:
             if not isinstance(item, dict):
-                self._json(400, {"error": "Agent entries must include a name and command."})
+                self._json(400, {"error": "Agent entries must be configuration objects."})
                 return
             name = str(item.get("name", "")).strip()[:80]
             model_name = str(item.get("model_name", "")).strip()[:120]
+            connection_type = str(item.get("connection_type", "custom_cli" if item.get("command") else "codex_cli"))
             command = str(item.get("command", "")).strip()[:2000]
-            if not name or not model_name or not command or "{prompt}" not in command:
+            endpoint = str(item.get("endpoint", "")).strip()[:1000]
+            api_key = str(item.get("api_key", "")).strip()[:4000]
+            if not name or not model_name:
                 self._json(
                     400,
-                    {"error": 'Each agent needs a name, model name and command containing "{prompt}".'},
+                    {"error": "Each agent needs a name and model name."},
                 )
+                return
+            if connection_type == "codex_cli":
+                command = 'codex exec --skip-git-repo-check --approve-for-me "{prompt}"'
+            elif connection_type == "claude_cli":
+                command = 'claude -p "{prompt}"'
+            elif connection_type == "openai_compatible":
+                parsed_endpoint = urlparse(endpoint)
+                local_http = parsed_endpoint.scheme == "http" and parsed_endpoint.hostname in {"localhost", "127.0.0.1", "::1"}
+                if not parsed_endpoint.hostname or parsed_endpoint.username or parsed_endpoint.password or (parsed_endpoint.scheme != "https" and not local_http):
+                    self._json(400, {"error": f"{name}: use an HTTPS API URL, or HTTP on localhost for a local service."})
+                    return
+                normalized_agents.append({
+                    "name": name,
+                    "model_name": model_name,
+                    "connection_type": connection_type,
+                    "endpoint": endpoint,
+                    "api_key": api_key,
+                    "command": "",
+                })
+                continue
+            elif connection_type != "custom_cli":
+                self._json(400, {"error": f"{name}: unsupported connection type."})
+                return
+            if not command or "{prompt}" not in command:
+                self._json(400, {"error": f'{name}: custom CLI commands must contain "{{prompt}}".'})
                 return
             try:
                 argv = shlex.split(command, posix=True)
@@ -591,7 +683,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             argv[0] = executable
             command = shlex.join(argv)
-            normalized_agents.append({"name": name, "model_name": model_name, "command": command})
+            normalized_agents.append({
+                "name": name,
+                "model_name": model_name,
+                "connection_type": connection_type,
+                "command": command,
+            })
 
         if importlib.util.find_spec("pytest") is None:
             self._json(
@@ -618,6 +715,9 @@ class Handler(SimpleHTTPRequestHandler):
                 {
                     "name": item["name"],
                     "model_name": item["model_name"],
+                    "connection_type": item["connection_type"],
+                    "endpoint": item.get("endpoint", ""),
+                    "api_key": item.get("api_key", ""),
                     "command": item["command"],
                     "status": "queued",
                     "passed": 0,
@@ -661,7 +761,7 @@ def main() -> None:
         parser.error("the local agent runner can only bind to 127.0.0.1 or localhost")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"CodeDebugArena dashboard: http://{args.host}:{args.port}/")
-    print("Agent CLI commands run locally in isolated temporary challenge copies.")
+    print("Agents run against isolated temporary challenge copies.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
