@@ -26,11 +26,12 @@ Name challenge folders with a two-digit numeric prefix, for example `13_safe_div
 
 ```bash
 python -m pip install -e ".[dev]"
-python -m pytest challenges/ tests/ -v --tb=short
+python runner.py test --target fixed
+python -m pytest tests/ -v --tb=short
 python runner.py validate
 ```
 
-All three commands should succeed before opening a pull request.
+All four commands should succeed before opening a pull request.
 
 ## Challenge README template
 
