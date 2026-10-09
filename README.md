@@ -40,6 +40,16 @@ challenges/XX_challenge_name/
 └── README.md
 ```
 
+## Dashboard UI
+
+A static dashboard prototype is available in [`web/`](web/). From the repository root, serve it locally with:
+
+```bash
+python -m http.server 8000 --directory web
+```
+
+Then open `http://localhost:8000`. The dashboard uses sample benchmark results and is not connected to model-provider APIs or `runner.py`; use the CLI commands below for actual challenge validation.
+
 ## Quick start
 
 Requires Python 3.9 or newer.
