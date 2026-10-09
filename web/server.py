@@ -74,6 +74,9 @@ def _resolve_executable(command: str) -> str | None:
 
 def _run_process(run_id: str, argv: list[str], *, timeout: int, **kwargs):
     """Run a child process that the stop endpoint can terminate."""
+    if kwargs.pop("capture_output", False):
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
     with _runs_lock:
         cancel_event = _run_cancel_events.get(run_id)
         if cancel_event and cancel_event.is_set():
