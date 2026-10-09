@@ -78,3 +78,30 @@ def test_buggy_target_that_passes_is_not_a_success(tmp_path, monkeypatch):
 
     assert challenge.exists()
     assert result != 0
+
+
+def test_buggy_collection_error_is_not_counted_as_expected_failure(tmp_path, monkeypatch):
+    _challenge(
+        tmp_path,
+        "01_collection_error",
+        "buggy.py",
+        "fixed.py",
+        "test_challenge.py",
+    )
+    monkeypatch.setattr(runner, "CHALLENGES_DIR", tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "_run_challenge_tests",
+        lambda challenge, target: (
+            2,
+            False,
+            "ERROR collecting test_challenge.py\\n"
+            "ModuleNotFoundError: No module named 'buggy'",
+        ),
+    )
+
+    result = runner.cmd_test(
+        SimpleNamespace(target="buggy", challenge=None, verbose=False)
+    )
+
+    assert result != 0
