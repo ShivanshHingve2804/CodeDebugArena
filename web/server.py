@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import shlex
+import signal
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,8 @@ MAX_RUNS = 50
 
 _runs: dict[str, dict] = {}
 _runs_lock = threading.RLock()
+_run_cancel_events: dict[str, threading.Event] = {}
+_active_processes: dict[str, subprocess.Popen] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="arena-run")
 
 
@@ -67,6 +70,90 @@ def _resolve_executable(command: str) -> str | None:
     if not candidates:
         return None
     return str(max(candidates, key=lambda candidate: candidate.stat().st_mtime))
+
+
+def _run_process(run_id: str, argv: list[str], *, timeout: int, **kwargs):
+    """Run a child process that the stop endpoint can terminate."""
+    with _runs_lock:
+        cancel_event = _run_cancel_events.get(run_id)
+        if cancel_event and cancel_event.is_set():
+            return None, "", ""
+
+    process = subprocess.Popen(argv, **kwargs)
+    with _runs_lock:
+        _active_processes[run_id] = process
+        cancel_event = _run_cancel_events.get(run_id)
+        should_stop = bool(cancel_event and cancel_event.is_set())
+    if should_stop:
+        _terminate_process(process)
+
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return process, stdout, stderr
+    except subprocess.TimeoutExpired:
+        _terminate_process(process)
+        process.communicate()
+        raise
+    finally:
+        with _runs_lock:
+            if _active_processes.get(run_id) is process:
+                _active_processes.pop(run_id, None)
+
+
+def _terminate_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        else:
+            process.send_signal(signal.SIGTERM)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def _stop_requested(run_id: str) -> bool:
+    with _runs_lock:
+        event = _run_cancel_events.get(run_id)
+        return bool(event and event.is_set())
+
+
+def _finish_stopped_run(run_id: str) -> None:
+    run = _snapshot(run_id)
+    if not run:
+        return
+    for index, agent in enumerate(run["agents"]):
+        if agent["status"] in {"queued", "running"}:
+            _set_agent(run_id, index, status="stopped")
+    _set_run(run_id, status="stopped", current=None, finished_at=_utc_now())
+    with _runs_lock:
+        _run_cancel_events.pop(run_id, None)
+
+
+def _request_stop(run_id: str) -> tuple[int, dict]:
+    with _runs_lock:
+        run = _runs.get(run_id)
+        if not run:
+            return 404, {"error": "Run not found."}
+        if run["status"] in {"complete", "stopped"}:
+            return 200, {"status": run["status"]}
+        event = _run_cancel_events.get(run_id)
+        if event:
+            event.set()
+        run["status"] = "stopping"
+        process = _active_processes.get(run_id)
+    if process:
+        _terminate_process(process)
+    return 202, {"status": "stopping"}
 
 
 def _snapshot(run_id: str, *, public: bool = False) -> dict | None:
@@ -112,7 +199,7 @@ def _line_changes(before: str, after: str) -> int:
     )
 
 
-def _run_one(agent: dict, challenge: Path) -> dict:
+def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
     before = (challenge / "buggy.py").read_text(encoding="utf-8")
     prompt_context = (challenge / "README.md").read_text(encoding="utf-8")
     prompt = (
@@ -171,15 +258,16 @@ def _run_one(agent: dict, challenge: Path) -> dict:
         ]
         started = time.monotonic()
         try:
-            agent_proc = subprocess.run(
+            agent_proc, agent_stdout, agent_stderr = _run_process(
+                run_id,
                 argv,
+                timeout=AGENT_TIMEOUT_SECONDS,
                 cwd=work_dir,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=AGENT_TIMEOUT_SECONDS,
-                check=False,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
         except FileNotFoundError:
             return {
@@ -201,6 +289,16 @@ def _run_one(agent: dict, challenge: Path) -> dict:
                 "test_time_s": 0,
                 "lines_changed": 0,
             }
+        if agent_proc is None or _stop_requested(run_id):
+            return {
+                "challenge_id": challenge.name,
+                "challenge": challenge.name[3:].replace("_", " ").title(),
+                "status": "stopped",
+                "error": "Evaluation stopped by user.",
+                "agent_time_s": round(time.monotonic() - started, 2),
+                "test_time_s": 0,
+                "lines_changed": 0,
+            }
         agent_time = round(time.monotonic() - started, 2)
         after = (work_dir / "buggy.py").read_text(encoding="utf-8")
         lines_changed = _line_changes(before, after)
@@ -214,7 +312,8 @@ def _run_one(agent: dict, challenge: Path) -> dict:
         env["CHALLENGE_TARGET"] = "buggy"
         test_started = time.monotonic()
         try:
-            test_proc = subprocess.run(
+            test_proc, test_stdout, test_stderr = _run_process(
+                run_id,
                 [
                     sys.executable,
                     "-m",
@@ -224,17 +323,27 @@ def _run_one(agent: dict, challenge: Path) -> dict:
                     "--tb=short",
                     "--import-mode=importlib",
                 ],
+                timeout=TEST_TIMEOUT_SECONDS,
                 cwd=work_dir,
                 env=env,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=TEST_TIMEOUT_SECONDS,
-                check=False,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
+            if test_proc is None or _stop_requested(run_id):
+                return {
+                    "challenge_id": challenge.name,
+                    "challenge": challenge.name[3:].replace("_", " ").title(),
+                    "status": "stopped",
+                    "error": "Evaluation stopped by user.",
+                    "agent_time_s": agent_time,
+                    "test_time_s": round(time.monotonic() - test_started, 2),
+                    "lines_changed": lines_changed,
+                }
             test_time = round(time.monotonic() - test_started, 2)
-            output = (test_proc.stdout + "\n" + test_proc.stderr).strip()
+            output = (test_stdout + "\n" + test_stderr).strip()
             passed = test_proc.returncode == 0
             error = "" if passed else (output[-2400:] or "Tests failed without output.")
             if not passed and "No module named pytest" in output:
@@ -262,13 +371,22 @@ def _run_one(agent: dict, challenge: Path) -> dict:
 
 
 def _execute_run(run_id: str, challenges: list[Path]) -> None:
+    if _stop_requested(run_id):
+        _finish_stopped_run(run_id)
+        return
     _set_run(run_id, status="running", started_at=_utc_now())
     run = _snapshot(run_id)
     if not run:
         return
     for agent_index, agent in enumerate(run["agents"]):
+        if _stop_requested(run_id):
+            _finish_stopped_run(run_id)
+            return
         _set_agent(run_id, agent_index, status="running")
         for challenge in challenges:
+            if _stop_requested(run_id):
+                _finish_stopped_run(run_id)
+                return
             with _runs_lock:
                 if run_id not in _runs:
                     return
@@ -278,7 +396,7 @@ def _execute_run(run_id: str, challenges: list[Path]) -> None:
                     "started_at": _utc_now(),
                 }
             try:
-                result = _run_one(agent, challenge)
+                result = _run_one(run_id, agent, challenge)
             except Exception as exc:  # Keep a single bad workspace from wedging a run.
                 result = {
                     "challenge_id": challenge.name,
@@ -290,6 +408,9 @@ def _execute_run(run_id: str, challenges: list[Path]) -> None:
                     "lines_changed": 0,
                 }
             _append_result(run_id, agent_index, result)
+            if result["status"] == "stopped" or _stop_requested(run_id):
+                _finish_stopped_run(run_id)
+                return
         current = _snapshot(run_id)
         if current:
             results = current["agents"][agent_index]["challenges"]
@@ -306,7 +427,19 @@ def _execute_run(run_id: str, challenges: list[Path]) -> None:
                 success_rate=round(100 * passed / len(results), 1) if results else 0,
                 lines_changed=sum(item["lines_changed"] for item in results),
             )
-    _set_run(run_id, status="complete", current=None, finished_at=_utc_now())
+    with _runs_lock:
+        cancel_event = _run_cancel_events.get(run_id)
+        if cancel_event and cancel_event.is_set():
+            should_finish_stopped = True
+        else:
+            should_finish_stopped = False
+            if run_id in _runs:
+                _runs[run_id].update(
+                    status="complete", current=None, finished_at=_utc_now()
+                )
+        _run_cancel_events.pop(run_id, None)
+    if should_finish_stopped:
+        _finish_stopped_run(run_id)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -357,7 +490,13 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path != "/api/runs":
+        parts = path.strip("/").split("/")
+        is_stop_request = (
+            len(parts) == 4
+            and parts[0:2] == ["api", "runs"]
+            and parts[3] == "stop"
+        )
+        if path != "/api/runs" and not is_stop_request:
             self._json(404, {"error": "Not found."})
             return
         host = self.headers.get("Host", "").lower()
@@ -375,6 +514,10 @@ class Handler(SimpleHTTPRequestHandler):
             ):
                 self._json(403, {"error": "Cross-origin run requests are not allowed."})
                 return
+        if is_stop_request:
+            status, response = _request_stop(parts[2])
+            self._json(status, response)
+            return
         if self.headers.get_content_type() != "application/json":
             self._json(415, {"error": "Send run requests as application/json."})
             return
@@ -472,6 +615,7 @@ class Handler(SimpleHTTPRequestHandler):
         }
         with _runs_lock:
             _runs[run_id] = run
+            _run_cancel_events[run_id] = threading.Event()
             while len(_runs) > MAX_RUNS:
                 oldest = next(iter(_runs))
                 if oldest == run_id:
