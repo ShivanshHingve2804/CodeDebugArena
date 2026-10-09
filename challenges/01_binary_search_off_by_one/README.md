@@ -2,23 +2,30 @@
 
 **Category:** Logic Bug  
 **Difficulty:** ⭐⭐  
-**Root Cause:** Incorrect boundary initialization and loop condition  
+**Root Cause:** The search bounds mix an exclusive upper bound with inclusive-bound updates.
 
 ## The Bug
 
-The buggy version has two related errors:
-1. `right = len(arr)` instead of `right = len(arr) - 1` — starts with an out-of-bounds index
-2. `while left < right` instead of `while left <= right` — misses checking when `left == right`
+The buggy implementation sets `right = len(arr)` and uses `while left < right`, but then updates the upper bound with `right = mid - 1`. Those operations do not follow one consistent binary-search invariant.
 
-Together, these cause the search to fail on the **last element** of the array and potentially access out-of-bounds indices.
+When the only remaining candidate has `left == right`, the loop stops without checking it. For example, the buggy version can return `-1` for target `3` in `[1, 3, 5, 7, 9]`.
+
+## The Fix
+
+Use inclusive bounds consistently:
+- Initialize `right = len(arr) - 1`.
+- Continue while `left <= right`.
+- When the middle element is too large, set `right = mid - 1`.
+
+The tests include elements on both sides of the middle, absent targets, empty and single-element arrays, and a larger sorted array.
 
 ## Why AI Agents Struggle
 
-- The code *looks* correct at first glance
-- It passes for most inputs — only fails on boundary cases
-- The two bugs partially compensate for each other, masking the issue
-- Off-by-one errors require careful reasoning about loop invariants
+- The implementation looks close to a valid binary search.
+- Boundary mistakes often affect only a subset of inputs.
+- The incorrect bound convention is mixed with an otherwise familiar algorithm.
 
 ## Common Wrong Fixes
-- Only fixing one of the two bugs (creates a different failure mode)
-- Changing to `right = len(arr)` with `left < right` (a valid alternative, but then `right = mid` not `right = mid - 1`)
+
+- Change only the loop condition or only the initial upper bound.
+- Switch to a half-open interval without also updating the bounds consistently.
