@@ -1,6 +1,6 @@
 # Local agent evaluation dashboard
 
-The dashboard starts a loopback-only Python web server and evaluates local command-line agents with the actual CodeDebugArena challenge tests.
+The dashboard starts a loopback-only Python web server and evaluates local CLI agents or compatible model APIs with the actual CodeDebugArena challenge tests.
 
 ## Start
 
@@ -32,4 +32,4 @@ After the run starts, the dashboard opens the live execution page in the same ta
 
 For each selected agent and challenge, the server creates a fresh temporary directory containing `buggy.py` and the challenge README. The agent is asked to edit only `buggy.py`; the trusted `test_challenge.py` is copied into the directory only after the agent exits. Pytest then evaluates the fix with `CHALLENGE_TARGET=buggy`. The dashboard reports actual pass/fail outcomes, agent time, test time, and changed lines. Temporary challenge workspaces are removed after each evaluation. Run history stays in memory until the server stops.
 
-Agents run on the host with the same permissions as the user running the server. Use only trusted CLIs. The agent timeout is three minutes per challenge; test execution is limited to twenty seconds. The server binds to `127.0.0.1` by default.
+CLI agents run on the host with the same permissions as the user running the server. API agents receive the selected challenge instructions and source code at the configured endpoint. Use only trusted CLIs and API endpoints. The agent timeout is three minutes per challenge; test execution is limited to twenty seconds. The server binds to `127.0.0.1` by default.
