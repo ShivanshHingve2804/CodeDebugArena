@@ -40,15 +40,23 @@ challenges/XX_challenge_name/
 └── README.md
 ```
 
-## Dashboard UI
+## Agent evaluation dashboard
 
-A static dashboard prototype is available in [`web/`](web/). From the repository root, serve it locally with:
+The local dashboard in [`web/`](web/) can run installed agent command-line tools against the real benchmark tests. Install the development dependencies, then start the loopback-only server from the repository root:
 
 ```bash
-python -m http.server 8000 --directory web
+python -m pip install -e ".[dev]"
+python web/server.py
 ```
 
-Then open `http://localhost:8000`. The dashboard uses sample benchmark results and is not connected to model-provider APIs or `runner.py`; use the CLI commands below for actual challenge validation.
+Open `http://127.0.0.1:8000`, add an agent command, choose challenges, and start an evaluation. The command must include a quoted `{prompt}` placeholder, for example `codex exec --full-auto "{prompt}"` or `claude -p "{prompt}"`. Install and authenticate each agent CLI separately; keep API credentials in the CLI environment rather than the dashboard. Each agent receives a temporary challenge copy without the tests. The trusted tests are added after the agent finishes, then pytest evaluates the edited `buggy.py`.
+
+The dashboard runs commands with your user permissions, so configure only agent CLIs you trust. It binds to `127.0.0.1` by default and stores run results in memory. The existing CLI remains available for benchmark validation:
+
+```bash
+python runner.py list
+python runner.py validate
+```
 
 ## Quick start
 
@@ -145,3 +153,4 @@ MIT. See [LICENSE](LICENSE).
 ## Author
 
 **Shivansh Hingve** — [GitHub](https://github.com/ShivanshHingve2804)
+
