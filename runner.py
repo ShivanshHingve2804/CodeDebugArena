@@ -322,7 +322,7 @@ def cmd_validate(args) -> int:
         elif not fixed_passes:
             issues.append("fixed implementation failed its tests")
 
-        print(f"  {RED}FAIL {challenge.name}: INVALID — {'; '.join(issues)}{RESET}")
+        print(f"  {RED}FAIL {challenge.name}: INVALID - {'; '.join(issues)}{RESET}")
         if not buggy_failure_detected:
             _print_failure_detail(buggy_output, getattr(args, "verbose", False))
         if not fixed_passes:
