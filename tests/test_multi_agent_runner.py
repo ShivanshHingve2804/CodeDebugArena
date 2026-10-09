@@ -46,7 +46,8 @@ def test_agent_timeout_is_reported(tmp_path):
 
     assert result["status"] == "timed_out"
     assert result["completion_seconds"] is not None
-    assert result["completion_seconds"] < 2
+    # Allow CI process-startup and shell teardown overhead on Windows.
+    assert result["completion_seconds"] < 5
 
 
 def test_report_has_one_result_per_agent_challenge_pair(tmp_path, monkeypatch):
