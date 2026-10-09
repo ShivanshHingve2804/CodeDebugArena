@@ -27,6 +27,8 @@ The command is split into arguments and run without a shell. Authenticate the CL
 
 On Windows, if `codex` is not on the server's `PATH`, the runner also checks the current user's `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe` installation automatically.
 
+After the run starts, the dashboard opens the live execution page in the same tab. Use **Stop evaluation** there to terminate the active CLI process and end the run. The live page stays open with completed results from the partial run.
+
 ## What an evaluation does
 
 For each selected agent and challenge, the server creates a fresh temporary directory containing `buggy.py` and the challenge README. The agent is asked to edit only `buggy.py`; the trusted `test_challenge.py` is copied into the directory only after the agent exits. Pytest then evaluates the fix with `CHALLENGE_TARGET=buggy`. The dashboard reports actual pass/fail outcomes, agent time, test time, and changed lines. Temporary challenge workspaces are removed after each evaluation. Run history stays in memory until the server stops.
