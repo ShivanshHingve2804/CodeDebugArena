@@ -15,7 +15,7 @@ Open <http://127.0.0.1:8000>. Stop the server with Ctrl+C.
 
 ## Configure an agent
 
-Add an agent name and command that accepts a task prompt as an argument. The command must include `{prompt}`. Examples:
+Add an agent name, model name, and command that accepts a task prompt as an argument. The model name is stored with each run for the live page, report, and CSV export. The command must include `{prompt}`. Examples:
 
 ```text
 codex exec --full-auto "{prompt}"
