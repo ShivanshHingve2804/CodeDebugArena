@@ -1,20 +1,33 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "code-debug-arena"
-version = "1.0.0"
+version = "1.0.1"
 description = "A curated benchmark of real-world Python bugs for evaluating AI coding agents"
 readme = "README.md"
-license = {text = "MIT"}
+license = { text = "MIT" }
 requires-python = ">=3.9"
-authors = [{name = "Shivansh Hingve", email = "shivanshhingve@gmail.com"}]
-keywords = ["debugging", "benchmark", "ai-evaluation", "coding-challenges", "python", "testing"]
+authors = [{ name = "Shivansh Hingve", email = "shivanshhingve@gmail.com" }]
+keywords = [
+  "debugging",
+  "benchmark",
+  "ai-evaluation",
+  "coding-challenges",
+  "python",
+  "testing",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0"]
 
+# CodeDebugArena is a source benchmark/CLI repository, not a Python library.
+# Install it in editable mode for development; run the tool with runner.py.
+[tool.setuptools]
+packages = []
+
 [tool.pytest.ini_options]
-testpaths = ["challenges"]
-python_files = ["test_challenge.py"]
+testpaths = ["challenges", "tests"]
+python_files = ["test_*.py"]
+addopts = "--import-mode=importlib"
