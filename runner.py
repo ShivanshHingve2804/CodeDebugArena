@@ -237,10 +237,14 @@ def cmd_test(args) -> int:
         elif return_code == 0:
             print(f"  {GREEN}OK {challenge.name}: ALL TESTS PASSED{RESET}")
             total_pass += 1
-        else:
+        elif _has_pytest_failure(output):
             print(f"  {RED}FAIL {challenge.name}: TESTS FAILED{RESET}")
             _print_failure_detail(output, args.verbose)
             total_fail += 1
+        else:
+            print(f"  {RED}ERROR {challenge.name}: pytest did not report a test failure{RESET}")
+            _print_failure_detail(output, args.verbose)
+            total_error += 1
 
     print(
         f"\n{BOLD}Results:{RESET} "
