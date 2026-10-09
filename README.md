@@ -92,20 +92,23 @@ For a successful validation run, all 12 challenges must meet those criteria.
 
 ## Running tests directly
 
-Pytest's default target is the corrected implementation.
+Challenge tests import `buggy.py` or `fixed.py` from their own directory, so use the runner to execute all challenges with the correct working directory and bounded timeouts.
 
 ```bash
-# Run all test suites against fixed.py
-python -m pytest challenges/ tests/ -v --tb=short
+# Run all challenge suites against fixed.py
+python runner.py test --target fixed
 
 # Run the runner's own regression tests
-python -m pytest tests/test_runner.py -v
+python -m pytest tests/ -v --tb=short
 
-# Run a single challenge's tests
-python -m pytest challenges/01_binary_search_off_by_one/test_challenge.py -v
+# Run one challenge
+python runner.py test --challenge 1 --target fixed
+
+# Validate that buggy versions fail and fixed versions pass
+python runner.py validate
 ```
 
-To run a challenge test module directly against the buggy implementation, set `CHALLENGE_TARGET=buggy` in your shell. For a full benchmark run, prefer `python runner.py test --target buggy` or `python runner.py validate`, since those commands enforce timeouts.
+For a full benchmark run, prefer `python runner.py test --target buggy` or `python runner.py validate`, since those commands enforce timeouts.
 
 ## How to use it for AI-agent evaluation
 
@@ -119,7 +122,7 @@ For a more rigorous evaluation, keep the tests hidden from the agent and add hel
 
 ## Continuous integration
 
-GitHub Actions validates the challenge set and runs automated tests on Ubuntu, Windows, and macOS with Python 3.9, 3.10, 3.11, and 3.12. This catches operating-system differences, packaging issues, and benchmark tests that fail to expose their intended defects.
+GitHub Actions validates the challenge set and runs the runner's regression tests on Ubuntu, Windows, and macOS with Python 3.9, 3.10, 3.11, and 3.12. This catches operating-system differences, packaging issues, and benchmark tests that fail to expose their intended defects.
 
 ## Contributing
 
