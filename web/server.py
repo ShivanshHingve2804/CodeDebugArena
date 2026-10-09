@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import copy
 import difflib
+import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -397,7 +399,24 @@ class Handler(SimpleHTTPRequestHandler):
                     {"error": 'Each agent needs a name and command containing "{prompt}".'},
                 )
                 return
+            try:
+                argv = shlex.split(command, posix=True)
+            except ValueError as exc:
+                self._json(400, {"error": f"{name}: command could not be parsed ({exc})."})
+                return
+            if not argv or shutil.which(argv[0]) is None:
+                self._json(400, {"error": f"{name}: agent executable was not found on PATH."})
+                return
             normalized_agents.append({"name": name, "command": command})
+
+        if importlib.util.find_spec("pytest") is None:
+            self._json(
+                424,
+                {
+                    "error": 'pytest is required before agent runs can start. Install it with: python -m pip install -e ".[dev]"'
+                },
+            )
+            return
 
         run_id = uuid.uuid4().hex[:12]
         pairs = len(normalized_agents) * len(challenge_ids)
