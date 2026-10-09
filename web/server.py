@@ -49,6 +49,26 @@ def _challenge_dirs() -> list[Path]:
     )
 
 
+def _resolve_executable(command: str) -> str | None:
+    """Resolve an agent CLI, including the Windows Codex desktop install."""
+    resolved = shutil.which(command)
+    if resolved:
+        return resolved
+
+    if os.name != "nt" or command.casefold() not in {"codex", "codex.exe"}:
+        return None
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return None
+    install_root = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
+    candidates = list(install_root.glob("*/codex.exe"))
+    candidates = [candidate for candidate in candidates if candidate.is_file()]
+    if not candidates:
+        return None
+    return str(max(candidates, key=lambda candidate: candidate.stat().st_mtime))
+
+
 def _snapshot(run_id: str, *, public: bool = False) -> dict | None:
     with _runs_lock:
         run = _runs.get(run_id)
@@ -405,9 +425,12 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError as exc:
                 self._json(400, {"error": f"{name}: command could not be parsed ({exc})."})
                 return
-            if not argv or shutil.which(argv[0]) is None:
+            executable = _resolve_executable(argv[0]) if argv else None
+            if not executable:
                 self._json(400, {"error": f"{name}: agent executable was not found on PATH."})
                 return
+            argv[0] = executable
+            command = shlex.join(argv)
             normalized_agents.append({"name": name, "command": command})
 
         if importlib.util.find_spec("pytest") is None:
