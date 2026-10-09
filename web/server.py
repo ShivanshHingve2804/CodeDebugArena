@@ -351,25 +351,35 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
             test_time = round(time.monotonic() - test_started, 2)
             output = (test_stdout + "\n" + test_stderr).strip()
             passed = test_proc.returncode == 0
-            error = "" if passed else (output[-2400:] or "Tests failed without output.")
             if not passed and "No module named pytest" in output:
-                error = 'pytest is not installed. Install project dependencies with: python -m pip install -e ".[dev]"'
-            if agent_proc.returncode != 0 and passed:
-                error = f"Agent exited with status {agent_proc.returncode}, but tests passed."
+                output = 'pytest is not installed. Install project dependencies with: python -m pip install -e ".[dev]"'
         except FileNotFoundError:
             test_time = round(time.monotonic() - test_started, 2)
             passed = False
-            error = 'pytest is not installed. Install project dependencies with: python -m pip install -e ".[dev]"'
+            output = 'pytest is not installed. Install project dependencies with: python -m pip install -e ".[dev]"'
         except subprocess.TimeoutExpired:
             test_time = round(time.monotonic() - test_started, 2)
             passed = False
-            error = f"Tests timed out after {TEST_TIMEOUT_SECONDS} seconds."
+            output = f"Tests timed out after {TEST_TIMEOUT_SECONDS} seconds."
+
+        diagnostics = []
+        if agent_proc.returncode != 0:
+            diagnostics.append(f"Agent exited with code {agent_proc.returncode}.")
+        if lines_changed == 0:
+            diagnostics.append("Agent left buggy.py unchanged (0 lines changed).")
+        agent_output = (agent_stdout + "\n" + agent_stderr).strip()
+        if agent_output:
+            diagnostics.append("Agent stdout/stderr:\n" + agent_output[-3000:])
+        if not passed:
+            diagnostics.append("Pytest/evaluator output:\n" + (output[-2400:] or "Tests failed without output."))
+        error = "\n\n".join(diagnostics)
 
         return {
             "challenge_id": challenge.name,
             "challenge": challenge.name[3:].replace("_", " ").title(),
             "status": "passed" if passed else "failed",
             "error": error,
+            "agent_exit_code": agent_proc.returncode,
             "agent_time_s": agent_time,
             "test_time_s": test_time,
             "lines_changed": lines_changed,
