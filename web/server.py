@@ -559,11 +559,12 @@ class Handler(SimpleHTTPRequestHandler):
                 self._json(400, {"error": "Agent entries must include a name and command."})
                 return
             name = str(item.get("name", "")).strip()[:80]
+            model_name = str(item.get("model_name", "")).strip()[:120]
             command = str(item.get("command", "")).strip()[:2000]
-            if not name or not command or "{prompt}" not in command:
+            if not name or not model_name or not command or "{prompt}" not in command:
                 self._json(
                     400,
-                    {"error": 'Each agent needs a name and command containing "{prompt}".'},
+                    {"error": 'Each agent needs a name, model name and command containing "{prompt}".'},
                 )
                 return
             try:
@@ -577,7 +578,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             argv[0] = executable
             command = shlex.join(argv)
-            normalized_agents.append({"name": name, "command": command})
+            normalized_agents.append({"name": name, "model_name": model_name, "command": command})
 
         if importlib.util.find_spec("pytest") is None:
             self._json(
@@ -603,6 +604,7 @@ class Handler(SimpleHTTPRequestHandler):
             "agents": [
                 {
                     "name": item["name"],
+                    "model_name": item["model_name"],
                     "command": item["command"],
                     "status": "queued",
                     "passed": 0,
