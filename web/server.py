@@ -214,7 +214,11 @@ def _openai_compatible_url(endpoint: str) -> str:
     endpoint = endpoint.rstrip("/")
     if endpoint.endswith("/chat/completions"):
         return endpoint
-    return endpoint + "/chat/completions" if endpoint.endswith("/v1") else endpoint + "/v1/chat/completions"
+    # Google AI Studio exposes an OpenAI-compatible root at /v1beta/openai,
+    # where the route is /chat/completions (without another /v1 segment).
+    if endpoint.endswith("/v1") or endpoint.endswith("/openai"):
+        return endpoint + "/chat/completions"
+    return endpoint + "/v1/chat/completions"
 
 
 def _run_openai_compatible(agent: dict, prompt: str, readme: str, source: str) -> str:
@@ -651,6 +655,8 @@ class Handler(SimpleHTTPRequestHandler):
                 command = 'codex exec --skip-git-repo-check --approve-for-me "{prompt}"'
             elif connection_type == "claude_cli":
                 command = 'claude -p "{prompt}"'
+            elif connection_type == "hermes_cli":
+                command = 'hermes chat --oneshot -q "{prompt}"'
             elif connection_type == "openai_compatible":
                 parsed_endpoint = urlparse(endpoint)
                 local_http = parsed_endpoint.scheme == "http" and parsed_endpoint.hostname in {"localhost", "127.0.0.1", "::1"}
@@ -666,7 +672,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "command": "",
                 })
                 continue
-            elif connection_type != "custom_cli":
+            elif connection_type not in {"custom_cli"}:
                 self._json(400, {"error": f"{name}: unsupported connection type."})
                 return
             if not command or "{prompt}" not in command:
