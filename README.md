@@ -49,7 +49,7 @@ python -m pip install -e ".[dev]"
 python web/server.py
 ```
 
-Open `http://127.0.0.1:8000`, add an agent command, choose challenges, and start an evaluation. The command must include a quoted `{prompt}` placeholder, for example `codex exec --full-auto "{prompt}"` or `claude -p "{prompt}"`. Install and authenticate each agent CLI separately; keep API credentials in the CLI environment rather than the dashboard. Each agent receives a temporary challenge copy without the tests. The trusted tests are added after the agent finishes, then pytest evaluates the edited `buggy.py`.
+Open `http://127.0.0.1:8000`, add an agent, choose challenges, and start an evaluation. Built-in options include Codex CLI, Claude Code, Hermes CLI, and an OpenAI-compatible API. For Hermes, the dashboard uses the provider and model configured in Hermes; authenticate and select the model there first. For Google AI Studio, use the Google Gemini Pro preset and enter your API key. Other CLI agents can be added with an Advanced CLI command containing a quoted `{prompt}` placeholder. Each agent receives a temporary challenge copy without the tests. The trusted tests are added after the agent finishes, then pytest evaluates the edited `buggy.py`.
 
 The dashboard runs commands with your user permissions, so configure only agent CLIs you trust. It binds to `127.0.0.1` by default and stores run results in memory. The existing CLI remains available for benchmark validation:
 
@@ -153,4 +153,3 @@ MIT. See [LICENSE](LICENSE).
 ## Author
 
 **Shivansh Hingve** — [GitHub](https://github.com/ShivanshHingve2804)
-
