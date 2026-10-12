@@ -42,21 +42,44 @@ challenges/XX_challenge_name/
 
 ## Agent evaluation dashboard
 
-The local dashboard in [`web/`](web/) can run installed agent command-line tools against the real benchmark tests. Install the development dependencies, then start the loopback-only server from the repository root:
+The dashboard in [`web/`](web/) evaluates Codex CLI and GitHub Copilot CLI in a local or cloud container, and supports multiple OpenAI-compatible API agents against the real benchmark tests. Install the development dependencies, then start the loopback-only server from the repository root:
 
 ```bash
 python -m pip install -e ".[dev]"
 python web/server.py
 ```
 
-Open `http://127.0.0.1:8000`, add an agent, choose challenges, and start an evaluation. Built-in options include Codex CLI, Claude Code, Hermes CLI, and an OpenAI-compatible API. For Hermes, the dashboard uses the provider and model configured in Hermes; authenticate and select the model there first. For Google AI Studio, use the Google Gemini Pro preset and enter your API key. Other CLI agents can be added with an Advanced CLI command containing a quoted `{prompt}` placeholder. Each agent receives a temporary challenge copy without the tests. The trusted tests are added after the agent finishes, then pytest evaluates the edited `buggy.py`.
+Open `http://127.0.0.1:8000`, add Codex, GitHub Copilot, or one or more OpenAI-compatible API agents, choose challenges, and start an evaluation. Copilot CLI needs a model ID and a fine-grained GitHub token with `Copilot Requests` permission. API agents need a display name, model ID, HTTPS API base URL, and API key. Each agent receives a temporary challenge copy without the tests. The trusted tests are added after the agent finishes, then pytest evaluates the edited `buggy.py`.
 
-The dashboard runs commands with your user permissions, so configure only agent CLIs you trust. It binds to `127.0.0.1` by default and stores run results in memory. The existing CLI remains available for benchmark validation:
+Local Codex CLI runs with the permissions of the user running the dashboard. Cloud Codex runs use the model ID and per-agent OpenAI API key entered for the run. Local dashboard mode binds to `127.0.0.1` by default and stores run results in memory. The existing CLI remains available for benchmark validation:
 
 ```bash
 python runner.py list
 python runner.py validate
 ```
+
+### Docker and cloud deployment
+
+The container installs Codex CLI, GitHub Copilot CLI, Python, and pytest, then runs as a non-root user with a read-only root filesystem, bounded temporary storage, and CPU, memory, and process limits. Cloud mode supports both CLIs and OpenAI-compatible API agents. Enter a provider key or token for each agent when starting a run; credentials are not saved to browser storage or included in run reports. A separate dashboard access token protects run and challenge API routes.
+
+For local Docker testing, copy `.env.example` to `.env`, replace `CDA_ACCESS_TOKEN` with a long random secret, then run:
+
+```bash
+docker compose up --build
+```
+
+Open `http://127.0.0.1:8000`. The browser will ask for the dashboard access token. Keep `.env` private; it is ignored by Git and excluded from the Docker build context.
+
+For a cloud platform that deploys from a Dockerfile, configure these environment variables in its secret/configuration panel:
+
+| Variable | Requirement |
+|---|---|
+| `CDA_CLOUD_MODE` | Set to `1` to require an API key per agent and enforce cloud endpoint checks. The Docker image enables this by default. |
+| `CDA_ACCESS_TOKEN` | Required. Use a long random secret; users enter it in the dashboard. |
+| `CDA_ALLOWED_HOSTS` | Comma-separated public hostnames accepted by the dashboard, without a scheme. |
+| `PORT` | Optional; the server uses the platform-provided port or `8000`. |
+
+Terminate public TLS at the hosting platform or reverse proxy and allow the dashboard hostname in `CDA_ALLOWED_HOSTS`. Keep the service behind private access or your platform's access control when possible. API-agent endpoints must use HTTPS and resolve to public IP addresses. Codex CLI uses the OpenAI API with its selected model ID and provided API key. Copilot CLI uses the GitHub account associated with the supplied Copilot token, and requires Copilot CLI access to be enabled for that account or organization.
 
 ## Quick start
 
@@ -153,3 +176,4 @@ MIT. See [LICENSE](LICENSE).
 ## Author
 
 **Shivansh Hingve** — [GitHub](https://github.com/ShivanshHingve2804)
+

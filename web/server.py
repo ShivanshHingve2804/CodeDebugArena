@@ -1,8 +1,4 @@
-"""Local web UI and agent evaluation server for CodeDebugArena.
-
-The server binds to loopback only. CLI agents and OpenAI-compatible model APIs
-run against a temporary copy of each challenge.
-"""
+"""Web UI and agent evaluation server for CodeDebugArena."""
 
 from __future__ import annotations
 
@@ -10,12 +6,14 @@ import copy
 import difflib
 import ast
 import importlib.util
+import hmac
+import ipaddress
 import json
 import os
 import re
-import shlex
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -27,7 +25,7 @@ from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from types import SimpleNamespace
 
 
@@ -43,6 +41,48 @@ _runs_lock = threading.RLock()
 _run_cancel_events: dict[str, threading.Event] = {}
 _active_processes: dict[str, subprocess.Popen] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="arena-run")
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Do not let a configured API endpoint redirect server-side requests."""
+
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+def _cloud_mode() -> bool:
+    configured = os.environ.get("CDA_CLOUD_MODE", os.environ.get("CDA_API_ONLY", "0"))
+    return configured.strip().lower() in {"1", "true", "yes"}
+
+
+def _access_token() -> str:
+    return os.environ.get("CDA_ACCESS_TOKEN", "").strip()
+
+
+def _allowed_hosts() -> set[str]:
+    configured = os.environ.get("CDA_ALLOWED_HOSTS", "localhost,127.0.0.1")
+    return {host.strip().lower() for host in configured.split(",") if host.strip()}
+
+
+def _is_public_https_endpoint(endpoint: str) -> bool:
+    """Reject non-HTTPS and hostnames that resolve to private or local networks."""
+    try:
+        parsed = urlparse(endpoint)
+        port = parsed.port or 443
+    except ValueError:
+        return False
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return False
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)}
+    except OSError:
+        return False
+    if not addresses:
+        return False
+    try:
+        return all(ipaddress.ip_address(address).is_global for address in addresses)
+    except ValueError:
+        return False
 
 
 def _utc_now() -> str:
@@ -78,6 +118,7 @@ def _resolve_executable(command: str) -> str | None:
 
 def _run_process(run_id: str, argv: list[str], *, timeout: int, **kwargs):
     """Run a child process that the stop endpoint can terminate."""
+    input_data = kwargs.pop("input_data", None)
     if kwargs.pop("capture_output", False):
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.PIPE
@@ -95,7 +136,7 @@ def _run_process(run_id: str, argv: list[str], *, timeout: int, **kwargs):
         _terminate_process(process)
 
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
+        stdout, stderr = process.communicate(input=input_data, timeout=timeout)
         return process, stdout, stderr
     except subprocess.TimeoutExpired:
         _terminate_process(process)
@@ -171,9 +212,7 @@ def _snapshot(run_id: str, *, public: bool = False) -> dict | None:
         result = copy.deepcopy(run) if run else None
     if result and public:
         for agent in result["agents"]:
-            # Commands can accidentally contain credentials; never echo them
-            # back through the status endpoint.
-            agent.pop("command", None)
+            # Never echo credentials or provider endpoints through the status API.
             agent.pop("api_key", None)
             agent.pop("endpoint", None)
     return result
@@ -214,8 +253,7 @@ def _openai_compatible_url(endpoint: str) -> str:
     endpoint = endpoint.rstrip("/")
     if endpoint.endswith("/chat/completions"):
         return endpoint
-    # Google AI Studio exposes an OpenAI-compatible root at /v1beta/openai,
-    # where the route is /chat/completions (without another /v1 segment).
+    # Some compatible providers expose /chat/completions directly below the API root.
     if endpoint.endswith("/v1") or endpoint.endswith("/openai"):
         return endpoint + "/chat/completions"
     return endpoint + "/v1/chat/completions"
@@ -249,7 +287,11 @@ def _run_openai_compatible(agent: dict, prompt: str, readme: str, source: str) -
     if agent.get("api_key"):
         headers["Authorization"] = "Bearer " + agent["api_key"]
     request = Request(_openai_compatible_url(agent["endpoint"]), data=payload, headers=headers)
-    with urlopen(request, timeout=AGENT_TIMEOUT_SECONDS) as response:
+    if _cloud_mode():
+        response_context = build_opener(_NoRedirectHandler()).open(request, timeout=AGENT_TIMEOUT_SECONDS)
+    else:
+        response_context = urlopen(request, timeout=AGENT_TIMEOUT_SECONDS)
+    with response_context as response:
         data = json.loads(response.read().decode("utf-8"))
     content = data["choices"][0]["message"]["content"]
     if isinstance(content, list):
@@ -280,7 +322,9 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
     )
 
     with tempfile.TemporaryDirectory(prefix="code-debug-arena-") as temp:
-        work_dir = Path(temp)
+        temp_root = Path(temp)
+        work_dir = temp_root / "workspace"
+        work_dir.mkdir()
         (work_dir / "buggy.py").write_text(before, encoding="utf-8")
         (work_dir / "README.md").write_text(prompt_context, encoding="utf-8")
         started = time.monotonic()
@@ -301,35 +345,22 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
                     "test_time_s": 0,
                     "lines_changed": 0,
                 }
-        else:
-            try:
-                argv = shlex.split(agent["command"], posix=True)
-            except ValueError as exc:
-                return {
-                    "challenge_id": challenge.name,
-                    "challenge": challenge.name[3:].replace("_", " ").title(),
-                    "status": "agent_error",
-                    "error": "Could not parse the agent command: " + str(exc),
-                    "agent_time_s": 0,
-                    "test_time_s": 0,
-                    "lines_changed": 0,
-                }
-            if not argv or "{prompt}" not in agent["command"]:
-                return {
-                    "challenge_id": challenge.name,
-                    "challenge": challenge.name[3:].replace("_", " ").title(),
-                    "status": "agent_error",
-                    "error": 'Agent command must be non-empty and include the "{prompt}" placeholder.',
-                    "agent_time_s": 0,
-                    "test_time_s": 0,
-                    "lines_changed": 0,
-                }
+        elif agent.get("connection_type") == "codex_cli":
             argv = [
-                token.replace("{prompt}", prompt)
-                .replace("{challenge}", challenge.name)
-                .replace("{challenge_dir}", str(work_dir))
-                for token in argv
+                agent["executable"], "exec", "--skip-git-repo-check",
+                "--sandbox", "workspace-write", "--ask-for-approval", "never",
+                "--model", agent["model_name"], "-",
             ]
+            agent_env = os.environ.copy()
+            if agent.get("api_key"):
+                agent_env["OPENAI_API_KEY"] = agent["api_key"]
+            if _cloud_mode() or agent.get("api_key"):
+                # Keep cloud Codex state in this challenge's temporary directory;
+                # local CLI sessions without an API key inherit the user's login.
+                codex_home = temp_root / "codex-home"
+                codex_home.mkdir()
+                agent_env["HOME"] = str(codex_home)
+                agent_env["CODEX_HOME"] = str(codex_home)
             try:
                 agent_proc, agent_stdout, agent_stderr = _run_process(
                     run_id,
@@ -340,6 +371,9 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    env=agent_env,
+                    stdin=subprocess.PIPE,
+                    input_data=prompt,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
                 )
             except FileNotFoundError:
@@ -358,6 +392,58 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
                     "challenge": challenge.name[3:].replace("_", " ").title(),
                     "status": "agent_error",
                     "error": f"Agent timed out after {AGENT_TIMEOUT_SECONDS} seconds.",
+                    "agent_time_s": round(time.monotonic() - started, 2),
+                    "test_time_s": 0,
+                    "lines_changed": 0,
+                }
+        else:
+            copilot_home = temp_root / "copilot-home"
+            copilot_home.mkdir()
+            agent_env = os.environ.copy()
+            agent_env["COPILOT_GITHUB_TOKEN"] = agent["api_key"]
+            agent_env["COPILOT_AUTO_UPDATE"] = "false"
+            agent_env["HOME"] = str(copilot_home)
+            agent_env["COPILOT_HOME"] = str(copilot_home)
+            argv = [
+                agent["executable"],
+                "--model=" + agent["model_name"],
+                "--no-ask-user",
+                "--allow-tool=write(buggy.py)",
+                "--deny-tool=shell",
+                "--deny-tool=url",
+                "-s",
+                "-p",
+                prompt,
+            ]
+            try:
+                agent_proc, agent_stdout, agent_stderr = _run_process(
+                    run_id,
+                    argv,
+                    timeout=AGENT_TIMEOUT_SECONDS,
+                    cwd=work_dir,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=agent_env,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                )
+            except FileNotFoundError:
+                return {
+                    "challenge_id": challenge.name,
+                    "challenge": challenge.name[3:].replace("_", " ").title(),
+                    "status": "agent_error",
+                    "error": "GitHub Copilot CLI was not found. Check that it is installed in the runner image.",
+                    "agent_time_s": round(time.monotonic() - started, 2),
+                    "test_time_s": 0,
+                    "lines_changed": 0,
+                }
+            except subprocess.TimeoutExpired:
+                return {
+                    "challenge_id": challenge.name,
+                    "challenge": challenge.name[3:].replace("_", " ").title(),
+                    "status": "agent_error",
+                    "error": f"GitHub Copilot CLI timed out after {AGENT_TIMEOUT_SECONDS} seconds.",
                     "agent_time_s": round(time.monotonic() - started, 2),
                     "test_time_s": 0,
                     "lines_changed": 0,
@@ -527,7 +613,7 @@ def _execute_run(run_id: str, challenges: list[Path]) -> None:
 
 
 class Handler(SimpleHTTPRequestHandler):
-    server_version = "CodeDebugArenaLocal/1.0"
+    server_version = "CodeDebugArena/1.0"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_ROOT), **kwargs)
@@ -545,8 +631,26 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _authorized(self) -> bool:
+        expected = _access_token()
+        if not expected:
+            return True
+        supplied = self.headers.get("Authorization", "")
+        if supplied.startswith("Bearer ") and hmac.compare_digest(supplied[7:], expected):
+            return True
+        self._json(401, {"error": "Dashboard access token is missing or invalid."})
+        return False
+
     def do_GET(self):
         path = unquote(urlparse(self.path).path)
+        if path == "/health":
+            self._json(200, {"status": "ok"})
+            return
+        if path == "/api/config":
+            self._json(200, {"auth_required": bool(_access_token()), "cloud_mode": _cloud_mode()})
+            return
+        if path.startswith("/api/") and not self._authorized():
+            return
         if path == "/api/challenges":
             self._json(
                 200,
@@ -583,20 +687,23 @@ class Handler(SimpleHTTPRequestHandler):
         if path != "/api/runs" and not is_stop_request:
             self._json(404, {"error": "Not found."})
             return
+        if not self._authorized():
+            return
         host = self.headers.get("Host", "").lower()
         hostname = urlparse("http://" + host).hostname
         origin = self.headers.get("Origin")
-        if hostname not in {"localhost", "127.0.0.1"}:
-            self._json(403, {"error": "Requests must use the local dashboard host."})
+        allowed_hosts = _allowed_hosts()
+        if hostname not in allowed_hosts:
+            self._json(403, {"error": "Request host is not in CDA_ALLOWED_HOSTS."})
             return
         if origin:
             parsed_origin = urlparse(origin)
             if (
-                parsed_origin.scheme != "http"
-                or parsed_origin.hostname not in {"localhost", "127.0.0.1"}
+                parsed_origin.scheme not in {"http", "https"}
+                or parsed_origin.hostname not in allowed_hosts
                 or parsed_origin.netloc.lower() != host
             ):
-                self._json(403, {"error": "Cross-origin run requests are not allowed."})
+                self._json(403, {"error": "Cross-origin run requests are not allowed; use the configured dashboard host."})
                 return
         if is_stop_request:
             status, response = _request_stop(parts[2])
@@ -641,8 +748,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             name = str(item.get("name", "")).strip()[:80]
             model_name = str(item.get("model_name", "")).strip()[:120]
-            connection_type = str(item.get("connection_type", "custom_cli" if item.get("command") else "codex_cli"))
-            command = str(item.get("command", "")).strip()[:2000]
+            connection_type = str(item.get("connection_type", "codex_cli"))
             endpoint = str(item.get("endpoint", "")).strip()[:1000]
             api_key = str(item.get("api_key", "")).strip()[:4000]
             if not name or not model_name:
@@ -651,16 +757,34 @@ class Handler(SimpleHTTPRequestHandler):
                     {"error": "Each agent needs a name and model name."},
                 )
                 return
-            if connection_type == "codex_cli":
-                command = 'codex exec --skip-git-repo-check --approve-for-me "{prompt}"'
-            elif connection_type == "claude_cli":
-                command = 'claude -p "{prompt}"'
-            elif connection_type == "hermes_cli":
-                command = 'hermes chat --oneshot -q "{prompt}"'
+            if connection_type not in {"codex_cli", "copilot_cli", "openai_compatible"}:
+                self._json(400, {"error": f"{name}: unsupported connection type."})
+                return
+            if connection_type == "copilot_cli" and not api_key:
+                self._json(400, {"error": f"{name}: a GitHub Copilot token is required."})
+                return
+            if _cloud_mode() and not api_key:
+                self._json(400, {"error": f"{name}: a provider key or token is required in cloud mode."})
+                return
+            if connection_type in {"codex_cli", "copilot_cli"}:
+                cli_name = "codex" if connection_type == "codex_cli" else "copilot"
+                executable = _resolve_executable(cli_name)
+                if not executable:
+                    self._json(400, {"error": f"{name}: {cli_name} CLI was not found in this deployment."})
+                    return
+                normalized_agents.append({
+                    "name": name,
+                    "model_name": model_name,
+                    "connection_type": connection_type,
+                    "executable": executable,
+                    "api_key": api_key,
+                })
+                continue
             elif connection_type == "openai_compatible":
                 parsed_endpoint = urlparse(endpoint)
                 local_http = parsed_endpoint.scheme == "http" and parsed_endpoint.hostname in {"localhost", "127.0.0.1", "::1"}
-                if not parsed_endpoint.hostname or parsed_endpoint.username or parsed_endpoint.password or (parsed_endpoint.scheme != "https" and not local_http):
+                endpoint_ok = _is_public_https_endpoint(endpoint) if _cloud_mode() else bool(parsed_endpoint.hostname and not parsed_endpoint.username and not parsed_endpoint.password and (parsed_endpoint.scheme == "https" or local_http))
+                if not endpoint_ok:
                     self._json(400, {"error": f"{name}: use an HTTPS API URL, or HTTP on localhost for a local service."})
                     return
                 normalized_agents.append({
@@ -669,32 +793,8 @@ class Handler(SimpleHTTPRequestHandler):
                     "connection_type": connection_type,
                     "endpoint": endpoint,
                     "api_key": api_key,
-                    "command": "",
                 })
                 continue
-            elif connection_type not in {"custom_cli"}:
-                self._json(400, {"error": f"{name}: unsupported connection type."})
-                return
-            if not command or "{prompt}" not in command:
-                self._json(400, {"error": f'{name}: custom CLI commands must contain "{{prompt}}".'})
-                return
-            try:
-                argv = shlex.split(command, posix=True)
-            except ValueError as exc:
-                self._json(400, {"error": f"{name}: command could not be parsed ({exc})."})
-                return
-            executable = _resolve_executable(argv[0]) if argv else None
-            if not executable:
-                self._json(400, {"error": f"{name}: agent executable was not found on PATH."})
-                return
-            argv[0] = executable
-            command = shlex.join(argv)
-            normalized_agents.append({
-                "name": name,
-                "model_name": model_name,
-                "connection_type": connection_type,
-                "command": command,
-            })
 
         if importlib.util.find_spec("pytest") is None:
             self._json(
@@ -724,7 +824,6 @@ class Handler(SimpleHTTPRequestHandler):
                     "connection_type": item["connection_type"],
                     "endpoint": item.get("endpoint", ""),
                     "api_key": item.get("api_key", ""),
-                    "command": item["command"],
                     "status": "queued",
                     "passed": 0,
                     "failed": 0,
@@ -759,12 +858,14 @@ class Handler(SimpleHTTPRequestHandler):
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run the local CodeDebugArena web UI.")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind address (loopback by default).")
-    parser.add_argument("--port", type=int, default=8000, help="HTTP port.")
+    parser = argparse.ArgumentParser(description="Run the CodeDebugArena dashboard.")
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"), help="Bind address (use 0.0.0.0 in a container).")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")), help="HTTP port.")
     args = parser.parse_args()
-    if args.host not in {"127.0.0.1", "localhost"}:
-        parser.error("the local agent runner can only bind to 127.0.0.1 or localhost")
+    if _cloud_mode() and not _access_token():
+        parser.error("CDA_ACCESS_TOKEN must be set when CDA_CLOUD_MODE=1.")
+    if not (0 < args.port < 65536):
+        parser.error("port must be between 1 and 65535")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"CodeDebugArena dashboard: http://{args.host}:{args.port}/")
     print("Agents run against isolated temporary challenge copies.")
@@ -778,3 +879,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

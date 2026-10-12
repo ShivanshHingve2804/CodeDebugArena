@@ -1,0 +1,29 @@
+services:
+  codedebugarena:
+    build: .
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: ${PORT:-8000}
+      CDA_CLOUD_MODE: "1"
+      CDA_ACCESS_TOKEN: ${CDA_ACCESS_TOKEN:?Set CDA_ACCESS_TOKEN in .env}
+      CDA_ALLOWED_HOSTS: ${CDA_ALLOWED_HOSTS:-localhost,127.0.0.1}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:${PORT:-8000}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8000')+'/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
