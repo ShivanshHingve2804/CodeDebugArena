@@ -25,6 +25,8 @@ hermes chat --oneshot -q "{prompt}"
 
 For Google AI Studio, use the **Google Gemini Pro** preset, enter an AI Studio API key, and verify your account can access `gemini-3.1-pro-preview`. Its base URL is `https://generativelanguage.googleapis.com/v1beta/openai/`; the dashboard calls the documented `/chat/completions` route. Google model IDs and access can change, so check the current [Gemini model list](https://ai.google.dev/gemini-api/docs/models).
 
+For an Ollama Cloud model through the local Ollama server, use the **Ollama Cloud** preset. It fills `http://localhost:11434/v1` and `deepseek-v4.1-flash:cloud`; sign in to Ollama on the machine running the dashboard first. Ollama also supports direct cloud API access at `https://ollama.com/v1` with an Ollama API key.
+
 The OpenAI-compatible API option accepts a base URL and model ID, sends the challenge and current source, and writes the returned complete Python file into the isolated challenge workspace. HTTP is allowed only for localhost; remote endpoints must use HTTPS. API keys are kept in browser memory for the session, sent only to the local runner and API endpoint, and omitted from run results. Advanced CLI commands run without a shell; authenticate the CLI before starting an evaluation.
 
 On Windows, if `codex` is not on the server's `PATH`, the runner also checks the current user's `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe` installation automatically.
