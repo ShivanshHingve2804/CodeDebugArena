@@ -39,8 +39,16 @@ if (-not $tokenLine) {
 }
 $token = $tokenLine -replace '^CDA_ACCESS_TOKEN=', ''
 
-docker info *> $null
-if ($LASTEXITCODE -ne 0) {
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $dockerInfoOutput = & docker info 2>&1
+    $dockerInfoExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($dockerInfoExitCode -ne 0) {
     throw 'Docker is not available. Start Docker Desktop, wait until it says it is running, then run .\start.ps1 again.'
 }
 
@@ -78,3 +86,4 @@ Write-Host $token
 Write-Host ''
 Write-Host 'Stop the app with .\stop.ps1. View status with .\status.ps1.'
 Start-Process $url
+
