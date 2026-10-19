@@ -62,13 +62,31 @@ python runner.py validate
 
 The container installs Codex CLI, GitHub Copilot CLI, Python, and pytest, then runs as a non-root user with a read-only root filesystem, bounded temporary storage, and CPU, memory, and process limits. Cloud mode supports both CLIs and OpenAI-compatible API agents. Enter a provider key or token for each agent when starting a run; credentials are not saved to browser storage or included in run reports. A separate dashboard access token protects run and challenge API routes.
 
-For local Docker testing, copy `.env.example` to `.env`, replace `CDA_ACCESS_TOKEN` with a long random secret, then run:
+For the easiest local Docker setup on Windows, start Docker Desktop and wait until it says it is running. Then double-click `start.cmd` in the project folder, or run this short command from PowerShell after opening that folder:
 
-```bash
-docker compose up --build
+```powershell
+.\start.cmd
 ```
 
-Open `http://127.0.0.1:8000`. The browser will ask for the dashboard access token. Keep `.env` private; it is ignored by Git and excluded from the Docker build context.
+The script creates a private `.env` with a random dashboard access token if needed, builds and starts the container, waits for the health check, and opens `http://127.0.0.1:8000`. It prints the access token to enter in the dashboard. This token is the dashboard password; each AI agent still needs its own provider API key or token when you start an evaluation. Keep `.env` private; it is ignored by Git and excluded from the Docker build context.
+
+Use these commands from PowerShell in the project folder:
+
+```powershell
+.\status.ps1  # Show whether the container is running
+.\logs.ps1    # Follow recent container logs; press Ctrl+C to stop following
+.\stop.ps1    # Stop the app
+```
+
+If Docker is unavailable, start Docker Desktop and try again. If startup fails, the launcher prints the container logs; you can also run `.\logs.ps1`.
+
+To start from any PowerShell location without changing folders, call the script by its full path, for example:
+
+```powershell
+& "C:\path\to\CodeDebugArena\start.ps1"
+```
+
+For manual setup, copy `.env.example` to `.env`, set a non-empty `CDA_ACCESS_TOKEN`, then run `docker compose up --build -d` from the project folder.
 
 For a cloud platform that deploys from a Dockerfile, configure these environment variables in its secret/configuration panel:
 
@@ -176,4 +194,3 @@ MIT. See [LICENSE](LICENSE).
 ## Author
 
 **Shivansh Hingve** — [GitHub](https://github.com/ShivanshHingve2804)
-
