@@ -215,6 +215,7 @@ def _snapshot(run_id: str, *, public: bool = False) -> dict | None:
             # Never echo credentials or provider endpoints through the status API.
             agent.pop("api_key", None)
             agent.pop("endpoint", None)
+            agent.pop("executable", None)
     return result
 
 
@@ -822,6 +823,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "name": item["name"],
                     "model_name": item["model_name"],
                     "connection_type": item["connection_type"],
+                    "executable": item.get("executable", ""),
                     "endpoint": item.get("endpoint", ""),
                     "api_key": item.get("api_key", ""),
                     "status": "queued",
