@@ -366,8 +366,9 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
                 # namespaces by selecting Codex's Landlock filesystem sandbox.
                 argv.extend(["-c", "features.use_legacy_landlock=true"])
             argv.extend([
+                "--ask-for-approval", "never",
                 "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
-                "--ask-for-approval", "never", "--model", agent["model_name"], "-",
+                "--model", agent["model_name"], "-",
             ])
             agent_env = _agent_environment() if _cloud_mode() else os.environ.copy()
             if agent.get("api_key"):
@@ -480,7 +481,27 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
         after = (work_dir / "buggy.py").read_text(encoding="utf-8")
         lines_changed = _line_changes(before, after)
 
-        # Copy the trusted test file only after the agent exits, so it cannot
+        # Do not run benchmark tests when the CLI itself rejected its arguments,
+        # failed authentication, or otherwise exited unsuccessfully.
+        if agent_proc.returncode != 0:
+            agent_output = (agent_stdout + "\\n" + agent_stderr).strip()
+            details = [f"Agent exited with code {agent_proc.returncode}."]
+            if lines_changed == 0:
+                details.append("Agent left buggy.py unchanged (0 lines changed).")
+            if agent_output:
+                details.append("Agent stdout/stderr:\\n" + agent_output[-3000:])
+            return {
+                "challenge_id": challenge.name,
+                "challenge": challenge.name[3:].replace("_", " ").title(),
+                "status": "agent_error",
+                "error": "\\n\\n".join(details),
+                "agent_exit_code": agent_proc.returncode,
+                "agent_time_s": agent_time,
+                "test_time_s": 0,
+                "lines_changed": lines_changed,
+            }
+
+        # Copy the trusted test file only after the agent exits successfully, so it cannot
         # change the evaluator's assertions or inspect tests during its run.
         (work_dir / "test_challenge.py").write_bytes(
             (challenge / "test_challenge.py").read_bytes()
