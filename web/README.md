@@ -13,9 +13,9 @@ Open <http://127.0.0.1:8000>. The supported CLI connections are Codex CLI and Gi
 
 ## Docker or cloud run
 
-Copy `.env.example` to `.env`, generate a strong dashboard access token, and run `docker compose up --build`. The container installs Codex CLI, GitHub Copilot CLI, Python, and pytest. Both CLIs and API agents can run in cloud mode. Provider API keys and Copilot tokens are saved in the browser's local storage for reuse; use **Forget saved credentials** to remove them. Anyone with access to that browser profile can access its saved credentials. For another Docker host, set `CDA_CLOUD_MODE=1`, `CDA_ACCESS_TOKEN`, `CDA_ALLOWED_HOSTS`, and the platform's `PORT`. The server rejects run requests without the dashboard token and accepts only API endpoints using HTTPS that resolve to public IP addresses.
+Copy `.env.example` to `.env`, generate a strong dashboard access token, and run `docker compose up --build`. The container installs Codex CLI, GitHub Copilot CLI, Python, and pytest. Both CLIs and API agents can run in cloud mode. Provider API keys and Copilot tokens stay in page memory and are cleared when the page reloads. For another Docker host, set `CDA_CLOUD_MODE=1`, `CDA_ACCESS_TOKEN`, `CDA_ALLOWED_HOSTS`, and the platform's `PORT`. The server rejects run requests without the dashboard token and accepts only API endpoints using HTTPS that resolve to public IP addresses.
 
-The image runs as a non-root user and enables a read-only root filesystem, temporary workspace, and resource limits. Put the service behind HTTPS at the platform or reverse proxy. See the main [README](../README.md#docker-and-cloud-deployment) for deployment details.
+The image runs as a non-root user and enables a read-only root filesystem, temporary workspace, and resource limits. In cloud mode, Codex uses its `workspace-write` sandbox with the Linux Landlock compatibility backend, so Docker does not need extra capabilities or an unconfined seccomp profile for nested Bubblewrap namespaces. Put the service behind HTTPS at the platform or reverse proxy. See the main [README](../README.md#docker-and-cloud-deployment) for deployment details.
 
 ## Evaluation behavior
 

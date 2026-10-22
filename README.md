@@ -60,7 +60,7 @@ python runner.py validate
 
 ### Docker and cloud deployment
 
-The container installs Codex CLI, GitHub Copilot CLI, Python, and pytest, then runs as a non-root user with a read-only root filesystem, bounded temporary storage, and CPU, memory, and process limits. Cloud mode supports both CLIs and OpenAI-compatible API agents. Provider keys and Copilot tokens are saved in the browser's local storage so you can reuse them; use **Forget saved credentials** in the dashboard to remove them. Anyone with access to that browser profile can access its saved credentials. Credentials are not included in run reports. A separate dashboard access token protects run and challenge API routes.
+The container installs Codex CLI, GitHub Copilot CLI, Python, and pytest, then runs as a non-root user with a read-only root filesystem, bounded temporary storage, and CPU, memory, and process limits. In cloud mode, Codex keeps its `workspace-write` filesystem sandbox and selects the Linux Landlock compatibility backend, avoiding nested Bubblewrap namespaces without adding container capabilities. Cloud mode supports both CLIs and OpenAI-compatible API agents. Provider API keys and Copilot tokens stay in page memory and are cleared when you reload the dashboard. Credentials are not included in run reports. A separate dashboard access token protects run and challenge API routes.
 
 For the easiest local Docker setup on Windows, start Docker Desktop and wait until it says it is running. Then double-click `start.cmd` in the project folder, or run this short command from PowerShell after opening that folder:
 

@@ -43,6 +43,19 @@ _active_processes: dict[str, subprocess.Popen] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="arena-run")
 
 
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="arena-run")
+
+
+def _agent_environment() -> dict[str, str]:
+    """Build a minimal child environment for agents in cloud/container mode."""
+    allowed = {
+        "PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE",
+        "TERM", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    }
+    return {key: value for key, value in os.environ.items() if key in allowed}
+
+
 class _NoRedirectHandler(HTTPRedirectHandler):
     """Do not let a configured API endpoint redirect server-side requests."""
 
@@ -347,12 +360,16 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
                     "lines_changed": 0,
                 }
         elif agent.get("connection_type") == "codex_cli":
-            argv = [
-                agent["executable"], "exec", "--skip-git-repo-check",
-                "--sandbox", "workspace-write", "--ask-for-approval", "never",
-                "--model", agent["model_name"], "-",
-            ]
-            agent_env = os.environ.copy()
+            argv = [agent["executable"]]
+            if _cloud_mode():
+                # Keep Docker capabilities dropped and avoid nested Bubblewrap
+                # namespaces by selecting Codex's Landlock filesystem sandbox.
+                argv.extend(["-c", "features.use_legacy_landlock=true"])
+            argv.extend([
+                "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
+                "--ask-for-approval", "never", "--model", agent["model_name"], "-",
+            ])
+            agent_env = _agent_environment() if _cloud_mode() else os.environ.copy()
             if agent.get("api_key"):
                 agent_env["OPENAI_API_KEY"] = agent["api_key"]
             if _cloud_mode() or agent.get("api_key"):
@@ -400,7 +417,7 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
         else:
             copilot_home = temp_root / "copilot-home"
             copilot_home.mkdir()
-            agent_env = os.environ.copy()
+            agent_env = _agent_environment() if _cloud_mode() else os.environ.copy()
             agent_env["COPILOT_GITHUB_TOKEN"] = agent["api_key"]
             agent_env["COPILOT_AUTO_UPDATE"] = "false"
             agent_env["HOME"] = str(copilot_home)
@@ -531,7 +548,7 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
         return {
             "challenge_id": challenge.name,
             "challenge": challenge.name[3:].replace("_", " ").title(),
-            "status": "passed" if passed else "failed",
+            "status": "agent_error" if agent_proc.returncode != 0 else ("passed" if passed else "failed"),
             "error": error,
             "agent_exit_code": agent_proc.returncode,
             "agent_time_s": agent_time,
