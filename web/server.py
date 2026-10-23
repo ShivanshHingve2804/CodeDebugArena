@@ -43,9 +43,6 @@ _active_processes: dict[str, subprocess.Popen] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="arena-run")
 
 
-_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="arena-run")
-
-
 def _agent_environment() -> dict[str, str]:
     """Build a minimal child environment for agents in cloud/container mode."""
     allowed = {
