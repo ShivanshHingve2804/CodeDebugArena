@@ -369,6 +369,8 @@ def _run_one(run_id: str, agent: dict, challenge: Path) -> dict:
             ])
             agent_env = _agent_environment() if _cloud_mode() else os.environ.copy()
             if agent.get("api_key"):
+                # Codex exec uses CODEX_API_KEY for non-interactive API-key authentication.
+                agent_env["CODEX_API_KEY"] = agent["api_key"]
                 agent_env["OPENAI_API_KEY"] = agent["api_key"]
             if _cloud_mode() or agent.get("api_key"):
                 # Keep cloud Codex state in this challenge's temporary directory;
