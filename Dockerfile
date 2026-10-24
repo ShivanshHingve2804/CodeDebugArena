@@ -14,7 +14,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir 'pytest>=7,<9' \
-    && npm install --global @openai/codex@0.130.0 \
+    && npm install --global @openai/codex@0.143.0 \
     && npm_config_ignore_scripts=false npm install --global @github/copilot \
     && groupadd --system arena \
     && useradd --system --gid arena --home-dir /tmp/codex-home arena
