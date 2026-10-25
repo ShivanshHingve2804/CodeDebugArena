@@ -5,6 +5,8 @@
 ![Challenges](https://img.shields.io/badge/challenges-12-orange.svg)
 ![License: MIT](https://img.shields.io/github/license/ShivanshHingve2804/CodeDebugArena)
 
+**Live dashboard:** [Open CodeDebugArena](https://codedebugarena-sf2pdj.v2.appdeploy.ai/)
+
 **CodeDebugArena is a reproducible benchmark of Python debugging challenges for evaluating AI coding agents.** Each challenge provides an intentionally buggy implementation, a corrected implementation, tests, and a root-cause explanation.
 
 The goal is to test whether an agent can understand existing code, locate the underlying defect, make a minimal correction, and preserve expected behavior.
@@ -57,6 +59,14 @@ Local Codex CLI runs with the permissions of the user running the dashboard. Clo
 python runner.py list
 python runner.py validate
 ```
+
+### Hosted demo and live code changes
+
+Use the [hosted dashboard](https://codedebugarena-sf2pdj.v2.appdeploy.ai/) to run an evaluation without installing the UI locally. Choose an agent, configure its model/provider credentials in the dashboard, select challenges, and start the run. API agents need a provider API key with available quota; authentication or quota errors appear in the challenge diagnostics.
+
+The hosted results page includes a **Live code changes** panel. It refreshes when each agent/challenge pair finishes and shows the changes to `buggy.py` alongside the benchmark result. Added lines are highlighted green when the trusted tests pass and red when they fail or were not verified; removed lines are highlighted red. Expand the issue details to inspect agent output and pytest diagnostics. The leaderboard, timing graph, and challenge results remain available on the report page.
+
+The hosted dashboard is served by AppDeploy, while evaluations run on the project's AWS EC2 Docker runner in temporary challenge workspaces. Run reports are held in memory and are cleared when the runner restarts. Enter your own provider key only when starting a run; never put it in source files or share it.
 
 ### Docker and cloud deployment
 
